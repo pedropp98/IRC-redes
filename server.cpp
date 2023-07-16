@@ -1,117 +1,226 @@
 #include <iostream>
 #include <cstring>
+#include <thread>
 #include <vector>
-#include <sys/socket.h>
-#include <arpa/inet.h>
+#include <map>
+#include <atomic>
+#include <csignal>
+#include <mutex>
+
+#ifdef _WIN32
+#include <winsock2.h>
+#pragma comment(lib, "ws2_32.lib")
+#else
 #include <unistd.h>
-#include <pthread.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#endif
 
-#define BUFFER_SIZE 4096
-#define MAX_CLIENTS 10
+constexpr int MAX_MESSAGE_LENGTH = 4096;
 
-struct ClientData {
-    int sock;
-    std::string apelido;
+std::atomic<bool> g_running(true);
+
+#ifdef _WIN32
+BOOL CtrlHandler(DWORD fdwCtrlType) {
+    if (fdwCtrlType == CTRL_C_EVENT) {
+        g_running = false;
+        return TRUE;
+    }
+    return FALSE;
+}
+#else
+void CtrlHandler(int) {
+    g_running = false;
+}
+#endif
+
+class Client {
+public:
+    Client(int socket) : socket_(socket), nickname_("") {}
+
+    int getSocket() const {
+        return socket_;
+    }
+
+    std::string getNickname() const {
+        return nickname_;
+    }
+
+    void setNickname(const std::string& nickname) {
+        nickname_ = nickname;
+    }
+
+    bool sendMessage(const std::string& message) {
+        if (send(socket_, message.c_str(), message.length(), 0) == -1) {
+            std::cerr << "Failed to send message to client" << std::endl;
+            return false;
+        }
+        return true;
+    }
+
+private:
+    int socket_;
+    std::string nickname_;
 };
 
-std::vector<ClientData> clients;
-pthread_mutex_t clientsMutex = PTHREAD_MUTEX_INITIALIZER;
+class Server {
+public:
+    Server(int port) : serverSocket_(0), port_(port) {}
 
-void *clientHandler(void *arg) {
-    ClientData client = *((ClientData*)arg);
-    char buffer[BUFFER_SIZE];
-
-    while (true) {
-        memset(buffer, 0, BUFFER_SIZE);
-        if (recv(client.sock, buffer, BUFFER_SIZE, 0) <= 0) {
-            pthread_mutex_lock(&clientsMutex);
-            auto it = std::find_if(clients.begin(), clients.end(), [&](const ClientData& c) {
-                return c.sock == client.sock;
-            });
-
-            if (it != clients.end()) {
-                clients.erase(it);
-                std::cout << "Cliente " << client.apelido << " desconectado." << std::endl;
-            }
-
-            pthread_mutex_unlock(&clientsMutex);
-            break;
+    bool start() {
+        if (!createServerSocket()) {
+            return false;
         }
 
-        std::string message = client.apelido + ": " + buffer;
-
-        pthread_mutex_lock(&clientsMutex);
-        for (const auto& otherClient : clients) {
-            if (otherClient.sock != client.sock) {
-                if (send(otherClient.sock, message.c_str(), message.size(), 0) < 0) {
-                    std::cerr << "Erro ao enviar a mensagem para o cliente" << std::endl;
-                    break;
-                }
-            }
+        if (!bindServerSocket()) {
+            return false;
         }
-        pthread_mutex_unlock(&clientsMutex);
+
+        if (!listenForClients()) {
+            return false;
+        }
+
+        std::cout << "Server started on port " << port_ << std::endl;
+
+        return true;
     }
 
-    close(client.sock);
-    delete (ClientData*)arg;
-    pthread_exit(nullptr);
-}
+    void acceptClients() {
+        while (g_running) {
+            int clientSocket = accept(serverSocket_, nullptr, nullptr);
+            if (clientSocket == -1) {
+                std::cerr << "Failed to accept client connection" << std::endl;
+                continue;
+            }
+
+            std::thread clientThread(&Server::handleClient, this, clientSocket);
+            clientThread.detach();
+        }
+    }
+
+    void stop() {
+        g_running = false;
+#ifdef _WIN32
+        closesocket(serverSocket_);
+        WSACleanup();
+#else
+        close(serverSocket_);
+#endif
+    }
+
+private:
+    bool createServerSocket() {
+#ifdef _WIN32
+        WSADATA wsData;
+        if (WSAStartup(MAKEWORD(2, 2), &wsData) != 0) {
+            std::cerr << "Failed to initialize winsock" << std::endl;
+            return false;
+        }
+#endif
+        serverSocket_ = socket(AF_INET, SOCK_STREAM, 0);
+        if (serverSocket_ == -1) {
+            std::cerr << "Failed to create server socket" << std::endl;
+            return false;
+        }
+        return true;
+    }
+
+    bool bindServerSocket() {
+        sockaddr_in serverAddress{};
+        serverAddress.sin_family = AF_INET;
+        serverAddress.sin_port = htons(port_);
+        serverAddress.sin_addr.s_addr = INADDR_ANY;
+
+        if (bind(serverSocket_, reinterpret_cast<struct sockaddr*>(&serverAddress), sizeof(serverAddress)) == -1) {
+            std::cerr << "Failed to bind server socket" << std::endl;
+            return false;
+        }
+        return true;
+    }
+
+    bool listenForClients() {
+        if (listen(serverSocket_, SOMAXCONN) == -1) {
+            std::cerr << "Failed to listen for clients" << std::endl;
+            return false;
+        }
+        return true;
+    }
+
+    void handleClient(int clientSocket) {
+        Client client(clientSocket);
+
+        char buffer[MAX_MESSAGE_LENGTH] = {0};
+        while (g_running) {
+            int bytesRead = recv(clientSocket, buffer, sizeof(buffer) - 1, 0);
+            if (bytesRead == 0) {
+                std::cout << "Client disconnected: " << client.getNickname() << std::endl;
+                break;
+            } else if (bytesRead == -1) {
+                std::cerr << "Failed to receive message from client: " << client.getNickname() << std::endl;
+                break;
+            }
+            buffer[bytesRead] = '\0';
+
+            std::string message(buffer);
+
+            if (message.find("/nickname") == 0) {
+                std::string nickname = message.substr(10);
+                client.setNickname(nickname);
+                std::cout << "Client connected: " << client.getNickname() << std::endl;
+                continue;
+            }
+
+            std::cout << client.getNickname() << ": " << message << std::endl;
+
+            broadcastMessage(client.getNickname() + ": " + message);
+        }
+
+        close(clientSocket);
+    }
+
+    void broadcastMessage(const std::string& message) {
+        std::lock_guard<std::mutex> lock(clientsMutex_);
+
+        for (auto& [_, client] : clients_) {
+            if (!client.sendMessage(message)) {
+                std::cout << "Failed to send message to client: " << client.getNickname() << std::endl;
+            }
+        }
+    }
+
+private:
+    int serverSocket_;
+    int port_;
+    std::map<int, Client> clients_;
+    std::mutex clientsMutex_;
+};
 
 int main() {
-    int serverSock = socket(AF_INET, SOCK_STREAM, 0);
-    if (serverSock == -1) {
-        std::cerr << "Erro ao criar o socket do servidor" << std::endl;
+    int serverPort;
+    std::cout << "Enter server port: ";
+    std::cin >> serverPort;
+
+    Server server(serverPort);
+
+    if (!server.start()) {
+        std::cerr << "Failed to start the server" << std::endl;
         return 1;
     }
 
-    sockaddr_in serverAddr{};
-    serverAddr.sin_family = AF_INET;
-    serverAddr.sin_port = htons(8080);
-    serverAddr.sin_addr.s_addr = INADDR_ANY;
-
-    if (bind(serverSock, (struct sockaddr*)&serverAddr, sizeof(serverAddr)) < 0) {
-        std::cerr << "Erro ao realizar o bind do servidor" << std::endl;
+#ifdef _WIN32
+    if (SetConsoleCtrlHandler(reinterpret_cast<PHANDLER_ROUTINE>(CtrlHandler), TRUE) == 0) {
+        std::cerr << "Failed to set CtrlHandler" << std::endl;
         return 1;
     }
+#else
+    signal(SIGINT, CtrlHandler);
+#endif
 
-    if (listen(serverSock, MAX_CLIENTS) < 0) {
-        std::cerr << "Erro ao iniciar a escuta do servidor" << std::endl;
-        return 1;
-    }
+    std::thread acceptThread(&Server::acceptClients, &server);
+    acceptThread.join();
 
-    std::cout << "Servidor aguardando conexões..." << std::endl;
+    server.stop();
 
-    while (true) {
-        sockaddr_in clientAddr{};
-        socklen_t clientAddrSize = sizeof(clientAddr);
-
-        int clientSock = accept(serverSock, (struct sockaddr*)&clientAddr, &clientAddrSize);
-        if (clientSock < 0) {
-            std::cerr << "Erro ao aceitar a conexão do cliente" << std::endl;
-            continue;
-        }
-
-        pthread_mutex_lock(&clientsMutex);
-        if (clients.size() >= MAX_CLIENTS) {
-            std::cerr << "Número máximo de clientes atingido. Conexão rejeitada." << std::endl;
-            close(clientSock);
-            pthread_mutex_unlock(&clientsMutex);
-            continue;
-        }
-
-        ClientData *clientData = new ClientData;
-        clientData->sock = clientSock;
-        clientData->apelido = std::to_string(clientSock);
-
-        clients.push_back(*clientData);
-        pthread_t threadId;
-        pthread_create(&threadId, nullptr, clientHandler, (void*)clientData);
-        pthread_detach(threadId);
-
-        std::cout << "Novo cliente conectado: " << clientData->apelido << std::endl;
-        pthread_mutex_unlock(&clientsMutex);
-    }
-
-    close(serverSock);
     return 0;
 }
