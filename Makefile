@@ -9,6 +9,12 @@ server: server.cpp
 client: client.cpp
 	$(CC) $(CFLAGS) -o client client.cpp
 
+run-server:
+	./server 
+ 
+run-client:
+	./client
+
 .PHONY: clean
 
 clean:
