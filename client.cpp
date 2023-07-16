@@ -86,7 +86,7 @@ int main() {
     std::cout << "Enter your nickname: ";
     std::cin.ignore(); // Ignore newline character from previous input
     std::getline(std::cin, nickname);
-    std::string nicknameCommand = "/nickname " + nickname + '\n';
+    std::string nicknameCommand = "/nickname " + nickname;
 
     if (send(clientSocket, nicknameCommand.c_str(), nicknameCommand.length(), 0) == -1) {
         std::cerr << "Failed to send nickname to server" << std::endl;

@@ -30,6 +30,7 @@ void CtrlHandler(int) {}
 struct Client {
     int socket;
     std::string nickname;
+    bool isConnected;
 };
 
 class Server {
@@ -142,7 +143,7 @@ private:
             }
 
             std::string clientId = "client_" + std::to_string(nextClientId_++);
-            clients_[clientId] = { clientSocket, "" };
+            clients_[clientId] = { clientSocket, "", false };
 
             std::thread clientThread(&Server::handleClient, this, clientSocket, clientId);
             clientThread.detach();
@@ -164,11 +165,13 @@ private:
             buffer[bytesRead] = '\0';
 
             std::string message(buffer);
-            if (!message.empty() && message[0] != '/') {
+            if (!message.empty() && message[0] != '/' && clients_[clientId].isConnected) {
                 std::cout << clients_[clientId].nickname << ": " << message << std::endl;
                 broadcastMessage(clients_[clientId].nickname + ": " + message);
             } else if (message.find("/nickname") == 0) {
                 clients_[clientId].nickname = message.substr(10);
+            } else if (message.find("/connect") == 0) {
+                clients_[clientId].isConnected = true;
             }
         }
 
