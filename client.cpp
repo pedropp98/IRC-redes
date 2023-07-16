@@ -5,51 +5,58 @@
 #include <arpa/inet.h>
 #include <unistd.h>
 
+const int MAX_MESSAGE_LENGTH = 4096;
+
 int main() {
-    // Criação do socket
     int clientSocket = socket(AF_INET, SOCK_STREAM, 0);
     if (clientSocket == -1) {
-        std::cerr << "Erro ao criar o socket";
+        std::cerr << "Erro ao criar o socket" << std::endl;
         return 1;
     }
 
-    // Configuração do endereço do servidor
     sockaddr_in serverAddress{};
     serverAddress.sin_family = AF_INET;
-    serverAddress.sin_port = htons(12345); // Porta do servidor
+    serverAddress.sin_port = htons(12345);
+    if (inet_pton(AF_INET, "127.0.0.1", &(serverAddress.sin_addr)) <= 0) {
+        std::cerr << "Endereço inválido" << std::endl;
+        return 1;
+    }
 
-    // Conexão ao servidor
     if (connect(clientSocket, reinterpret_cast<sockaddr*>(&serverAddress), sizeof(serverAddress)) < 0) {
-        std::cerr << "Erro ao conectar ao servidor";
+        std::cerr << "Erro ao conectar ao servidor" << std::endl;
         return 1;
     }
 
     std::cout << "Conectado ao servidor!" << std::endl;
 
-    // Recebe e envia mensagens
+    char buffer[MAX_MESSAGE_LENGTH];
+
     while (true) {
-        std::cout << "Digite sua mensagem: ";
         std::string message;
         std::getline(std::cin, message);
 
-        int bytesSent = send(clientSocket, message.c_str(), message.size(), 0);
-        if (bytesSent <= 0) {
-            std::cerr << "Erro no envio da mensagem";
+        if (message == "/quit") {
+            send(clientSocket, message.c_str(), message.size(), 0);
             break;
         }
 
-        char receivedMessage[4096];
-        int bytesRead = recv(clientSocket, receivedMessage, sizeof(receivedMessage), 0);
-        if (bytesRead <= 0) {
-            std::cerr << "Erro na recepção da mensagem";
-            break;
-        }
+        if (message == "/ping") {
+            send(clientSocket, message.c_str(), message.size(), 0);
 
-        receivedMessage[bytesRead] = '\0';
-        std::cout << "Servidor: " << receivedMessage << std::endl;
+            int bytesRead = recv(clientSocket, buffer, sizeof(buffer), 0);
+            if (bytesRead <= 0) {
+                std::cerr << "Erro na recepção da mensagem" << std::endl;
+                break;
+            }
+
+            buffer[bytesRead] = '\0';
+            std::cout << "Servidor: " << buffer << std::endl;
+        }
+        else {
+            send(clientSocket, message.c_str(), message.size(), 0);
+        }
     }
 
-    // Encerramento da conexão
     close(clientSocket);
 
     return 0;
