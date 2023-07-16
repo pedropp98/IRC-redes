@@ -1,63 +1,61 @@
 #include <iostream>
-#include <string>
 #include <cstring>
 #include <sys/socket.h>
 #include <arpa/inet.h>
 #include <unistd.h>
 
-const int MAX_MESSAGE_LENGTH = 4096;
+#define BUFFER_SIZE 4096
 
 int main() {
-    int clientSocket = socket(AF_INET, SOCK_STREAM, 0);
-    if (clientSocket == -1) {
+    int sock = socket(AF_INET, SOCK_STREAM, 0);
+    if (sock == -1) {
         std::cerr << "Erro ao criar o socket" << std::endl;
         return 1;
     }
 
-    sockaddr_in serverAddress{};
-    serverAddress.sin_family = AF_INET;
-    serverAddress.sin_port = htons(12345);
-
-    if (inet_pton(AF_INET, "127.0.0.1", &(serverAddress.sin_addr)) <= 0) {
+    sockaddr_in serverAddr{};
+    serverAddr.sin_family = AF_INET;
+    serverAddr.sin_port = htons(8080);
+    if (inet_pton(AF_INET, "127.0.0.1", &(serverAddr.sin_addr)) <= 0) {
         std::cerr << "Endereço inválido" << std::endl;
         return 1;
     }
 
-    if (connect(clientSocket, reinterpret_cast<sockaddr*>(&serverAddress), sizeof(serverAddress)) < 0) {
-        std::cerr << "Erro na conexão" << std::endl;
+    if (connect(sock, (struct sockaddr*)&serverAddr, sizeof(serverAddr)) < 0) {
+        std::cerr << "Erro ao conectar ao servidor" << std::endl;
         return 1;
     }
 
-    std::cout << "Conexão estabelecida. Digite seu apelido:" << std::endl;
-    std::string nickname;
-    std::getline(std::cin, nickname);
+    char buffer[BUFFER_SIZE];
 
-    send(clientSocket, nickname.c_str(), nickname.size(), 0);
+    std::cout << "Digite seu apelido: ";
+    std::string apelido;
+    std::getline(std::cin, apelido);
 
-    char buffer[MAX_MESSAGE_LENGTH];
+    std::string message;
 
     while (true) {
-        std::string message;
+        std::cout << apelido << ": ";
         std::getline(std::cin, message);
 
         if (message == "/quit") {
-            send(clientSocket, message.c_str(), message.size(), 0);
             break;
         }
 
-        send(clientSocket, message.c_str(), message.size(), 0);
-
-        int bytesRead = recv(clientSocket, buffer, sizeof(buffer), 0);
-        if (bytesRead <= 0) {
-            std::cerr << "Conexão encerrada pelo servidor" << std::endl;
+        if (send(sock, message.c_str(), message.size(), 0) < 0) {
+            std::cerr << "Erro ao enviar a mensagem" << std::endl;
             break;
         }
 
-        buffer[bytesRead] = '\0';
+        memset(buffer, 0, BUFFER_SIZE);
+        if (recv(sock, buffer, BUFFER_SIZE, 0) < 0) {
+            std::cerr << "Erro ao receber a resposta do servidor" << std::endl;
+            break;
+        }
+
         std::cout << "Resposta do servidor: " << buffer << std::endl;
     }
 
-    close(clientSocket);
-
+    close(sock);
     return 0;
 }

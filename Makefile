@@ -1,21 +1,14 @@
-CC := g++
-CFLAGS := -std=c++11
+CC = g++
+CFLAGS = -std=c++11 -Wall -Wextra -pthread
+TARGETS = cliente servidor
 
-all: server client
+all: $(TARGETS)
 
-server: server.cpp
-	$(CC) $(CFLAGS) -o server server.cpp
+cliente: Cliente.cpp
+	$(CC) $(CFLAGS) -o cliente Cliente.cpp
 
-client: client.cpp
-	$(CC) $(CFLAGS) -o client client.cpp
-
-run-server:
-	./server 
- 
-run-client:
-	./client
-
-.PHONY: clean
+servidor: Servidor.cpp
+	$(CC) $(CFLAGS) -o servidor Servidor.cpp
 
 clean:
-	rm -f server client
+	rm -f $(TARGETS)
