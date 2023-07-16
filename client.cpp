@@ -13,6 +13,7 @@
 #endif
 
 constexpr int MAX_MESSAGE_LENGTH = 4096;
+constexpr int MAX_NICKNAME_LENGTH = 32;
 
 #ifdef _WIN32
 BOOL CtrlHandler(DWORD fdwCtrlType) {
@@ -26,7 +27,7 @@ void CtrlHandler(int) {}
 #endif
 
 void receiveMessages(int socket) {
-    char buffer[MAX_MESSAGE_LENGTH] = {0};
+    char buffer[MAX_MESSAGE_LENGTH] = { 0 };
     while (true) {
         int bytesRead = recv(socket, buffer, sizeof(buffer) - 1, 0);
         if (bytesRead == 0) {
@@ -105,8 +106,6 @@ int main() {
         if (message == "/quit") {
             break;
         }
-
-        message = nickname + ": " + message + '\n';
 
         if (send(clientSocket, message.c_str(), message.length(), 0) == -1) {
             std::cerr << "Failed to send message to server" << std::endl;
