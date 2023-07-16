@@ -17,17 +17,22 @@ int main() {
     sockaddr_in serverAddress{};
     serverAddress.sin_family = AF_INET;
     serverAddress.sin_port = htons(12345);
+
     if (inet_pton(AF_INET, "127.0.0.1", &(serverAddress.sin_addr)) <= 0) {
         std::cerr << "Endereço inválido" << std::endl;
         return 1;
     }
 
     if (connect(clientSocket, reinterpret_cast<sockaddr*>(&serverAddress), sizeof(serverAddress)) < 0) {
-        std::cerr << "Erro ao conectar ao servidor" << std::endl;
+        std::cerr << "Erro na conexão" << std::endl;
         return 1;
     }
 
-    std::cout << "Conectado ao servidor!" << std::endl;
+    std::cout << "Conexão estabelecida. Digite seu apelido:" << std::endl;
+    std::string nickname;
+    std::getline(std::cin, nickname);
+
+    send(clientSocket, nickname.c_str(), nickname.size(), 0);
 
     char buffer[MAX_MESSAGE_LENGTH];
 
@@ -40,21 +45,16 @@ int main() {
             break;
         }
 
-        if (message == "/ping") {
-            send(clientSocket, message.c_str(), message.size(), 0);
+        send(clientSocket, message.c_str(), message.size(), 0);
 
-            int bytesRead = recv(clientSocket, buffer, sizeof(buffer), 0);
-            if (bytesRead <= 0) {
-                std::cerr << "Erro na recepção da mensagem" << std::endl;
-                break;
-            }
+        int bytesRead = recv(clientSocket, buffer, sizeof(buffer), 0);
+        if (bytesRead <= 0) {
+            std::cerr << "Conexão encerrada pelo servidor" << std::endl;
+            break;
+        }
 
-            buffer[bytesRead] = '\0';
-            std::cout << "Servidor: " << buffer << std::endl;
-        }
-        else {
-            send(clientSocket, message.c_str(), message.size(), 0);
-        }
+        buffer[bytesRead] = '\0';
+        std::cout << "Resposta do servidor: " << buffer << std::endl;
     }
 
     close(clientSocket);
