@@ -39,25 +39,25 @@ void broadcastMessage(const std::string& message, int senderSocket) {
 void clientHandler(int clientSocket) {
     char buffer[MAX_MESSAGE_LENGTH];
 
-    std::lock_guard<std::mutex> lock(clientsMutex);
-    auto clientIt = std::find_if(clients.begin(), clients.end(),
-        [clientSocket](const Client& client) {
-            return client.socket == clientSocket;
-        });
-
-    if (clientIt == clients.end()) {
-        close(clientSocket);
-        return;
-    }
-
-    Client& client = *clientIt;
+    std::string nickname;
 
     while (true) {
-        int bytesRead = recv(client.socket, buffer, sizeof(buffer), 0);
+        int bytesRead = recv(clientSocket, buffer, sizeof(buffer), 0);
         if (bytesRead <= 0) {
-            if (client.connected) {
-                std::cout << "Cliente desconectado: " << client.nickname << std::endl;
-                client.connected = false;
+            if (!nickname.empty()) {
+                std::lock_guard<std::mutex> lock(clientsMutex);
+                auto clientIt = std::find_if(clients.begin(), clients.end(),
+                    [clientSocket](const Client& client) {
+                        return client.socket == clientSocket;
+                    });
+
+                if (clientIt != clients.end()) {
+                    Client& client = *clientIt;
+                    if (client.connected) {
+                        std::cout << "Cliente desconectado: " << client.nickname << std::endl;
+                        client.connected = false;
+                    }
+                }
             }
             break;
         }
@@ -67,47 +67,42 @@ void clientHandler(int clientSocket) {
         std::string message(buffer);
 
         if (message == "/quit") {
-            std::cout << "Cliente fechou a conexão: " << client.nickname << std::endl;
-            client.connected = false;
+            if (!nickname.empty()) {
+                std::cout << "Cliente fechou a conexão: " << nickname << std::endl;
+                std::lock_guard<std::mutex> lock(clientsMutex);
+                auto clientIt = std::find_if(clients.begin(), clients.end(),
+                    [clientSocket](const Client& client) {
+                        return client.socket == clientSocket;
+                    });
+
+                if (clientIt != clients.end()) {
+                    Client& client = *clientIt;
+                    if (client.connected) {
+                        client.connected = false;
+                        close(client.socket);
+                    }
+                }
+            }
             break;
         }
 
-        if (message == "/ping") {
-            std::string pongMessage = "pong\n";
-            send(client.socket, pongMessage.c_str(), pongMessage.size(), 0);
+        if (nickname.empty()) {
+            nickname = message;
+            std::cout << "Cliente conectado: " << nickname << std::endl;
+
+            std::lock_guard<std::mutex> lock(clientsMutex);
+            clients.emplace_back(clientSocket);
+        } else {
+            if (message == "/ping") {
+                std::string pongMessage = "pong\n";
+                send(clientSocket, pongMessage.c_str(), pongMessage.size(), 0);
+            } else {
+                broadcastMessage(nickname + ": " + message, clientSocket);
+            }
         }
-
-        broadcastMessage(message, client.socket);
-
-        client.retries = 0;
     }
 
-    close(client.socket);
-}
-
-void checkClientStatus() {
-    while (true) {
-        std::lock_guard<std::mutex> lock(clientsMutex);
-
-        for (auto& client : clients) {
-            if (!client.connected) {
-                continue;
-            }
-
-            if (client.retries >= MAX_RETRIES) {
-                std::cout << "Cliente desconectado após tentativas falhas: " << client.nickname << std::endl;
-                client.connected = false;
-                close(client.socket);
-                continue;
-            }
-
-            std::string pingMessage = "/ping";
-            send(client.socket, pingMessage.c_str(), pingMessage.size(), 0);
-            client.retries++;
-        }
-
-        std::this_thread::sleep_for(std::chrono::seconds(5));
-    }
+    close(clientSocket);
 }
 
 int main() {
@@ -134,8 +129,6 @@ int main() {
 
     std::cout << "Aguardando conexões de clientes..." << std::endl;
 
-    std::thread statusThread(checkClientStatus);
-
     while (true) {
         sockaddr_in clientAddress{};
         socklen_t clientAddressLength = sizeof(clientAddress);
@@ -144,11 +137,6 @@ int main() {
             std::cerr << "Erro ao aceitar a conexão" << std::endl;
             return 1;
         }
-
-        std::cout << "Novo cliente conectado" << std::endl;
-
-        std::lock_guard<std::mutex> lock(clientsMutex);
-        clients.emplace_back(clientSocket);
 
         std::thread clientThread(clientHandler, clientSocket);
         clientThread.detach();
