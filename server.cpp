@@ -165,13 +165,21 @@ private:
             buffer[bytesRead] = '\0';
 
             std::string message(buffer);
-            if (!message.empty() && message[0] != '/' && clients_[clientId].isConnected) {
+            if (message.find("/nickname") == 0) {
+                clients_[clientId].nickname = message.substr(10);
+            } 
+            else if (message.find("/connect") == 0) {
+                clients_[clientId].isConnected = true;
+                std::cout << clients_[clientId].nickname << " connected." << std::endl;
+                broadcastMessage(clients_[clientId].nickname + " connected.\n");
+            } 
+            else if (!message.empty() && message[0] != '/' && clients_[clientId].isConnected) {
                 std::cout << clients_[clientId].nickname << ": " << message << std::endl;
                 broadcastMessage(clients_[clientId].nickname + ": " + message);
-            } else if (message.find("/nickname") == 0) {
-                clients_[clientId].nickname = message.substr(10);
-            } else if (message.find("/connect") == 0) {
-                clients_[clientId].isConnected = true;
+            }
+            else if (message.find("/ping") == 0) {
+                std::cout << "Server: pong" << std::endl;
+                broadcastMessage("Server: pong");
             }
         }
 

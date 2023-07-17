@@ -102,8 +102,9 @@ int main() {
     std::string message;
     while (true) {
         std::getline(std::cin, message);
-
-        if (message == "/quit") {
+        if (message.find("/quit") == 0) {
+            std::cout << "Disconnected." << std::endl;
+            close(clientSocket);
             break;
         }
 
