@@ -1,9 +1,11 @@
 #include <iostream>
 #include <cstring>
 #include <unordered_map>
+#include <vector>
 #include <thread>
 #include <mutex>
 #include <chrono>
+#include <algorithm>
 
 #ifdef _WIN32
 #include <winsock2.h>
@@ -36,6 +38,12 @@ struct Client {
     bool isConnected;
     bool isAdmin;
     int failedAttempts;
+};
+
+struct Channel {
+    std::vector<std::string> users;
+    std::vector<std::string> mutedUsers;
+    std::string adminNickname;
 };
 
 class Server {
@@ -162,6 +170,7 @@ private:
             int bytesRead = recv(clientSocket, buffer, sizeof(buffer) - 1, 0);
             if (bytesRead == 0) {
                 std::cout << "Client " << clients_[clientId].nickname << " disconnected" << std::endl;
+                removeUserFromChannel(clients_[clientId].channelName, clientId);
                 break;
             } else if (bytesRead == -1) {
                 std::cerr << "Failed to receive message from client " << clients_[clientId].nickname << std::endl;
@@ -175,24 +184,19 @@ private:
             } else if (message.find("/connect") == 0) {
                 clients_[clientId].isConnected = true;
                 std::cout << clients_[clientId].nickname << " connected." << std::endl;
-                broadcastMessage(clients_[clientId].nickname + " connected.\n");
+                broadcastMessage(clients_[clientId].nickname + " connected.\n", clients_[clientId].channelName);
             } else if (message.find("/join") == 0) {
                 std::string channelName = message.substr(6);
                 if (!channelName.empty()) {
-                    clients_[clientId].channelName = channelName;
-                    clients_[clientId].isAdmin = (channelNameToAdmin_.count(channelName) == 0);
-                    channelNameToAdmin_[channelName] = clientId;
-                    std::cout << clients_[clientId].nickname << " joined channel " << channelName << std::endl;
+                    joinChannel(channelName, clientId);
                 }
             } else if (!message.empty() && message[0] != '/' && clients_[clientId].isConnected) {
                 std::cout << clients_[clientId].nickname << ": " << message << std::endl;
-                broadcastMessage(clients_[clientId].nickname + ": " + message);
+                broadcastMessage(clients_[clientId].nickname + ": " + message, clients_[clientId].channelName);
             } else if (message.find("/ping") == 0) {
                 std::cout << "Server: pong" << std::endl;
-                broadcastMessage("Server: pong");
-            }
-
-            if (!clients_[clientId].isConnected && !clients_[clientId].channelName.empty()) {
+                broadcastMessage("Server: pong", clients_[clientId].channelName);
+            } else if (!message.empty() && !clients_[clientId].isConnected && !clients_[clientId].channelName.empty()) {
                 // Check if the client receive the messages
                 if (clients_[clientId].failedAttempts < 5) {
                     if (!sendMessage(clientSocket, "Please use the /connect command to establish a connection.")) {
@@ -215,12 +219,49 @@ private:
 #endif
     }
 
-    void broadcastMessage(const std::string& message) {
+    void joinChannel(const std::string& channelName, const std::string& clientId) {
         std::lock_guard<std::mutex> lock(clientsMutex_);
-        for (const auto& client : clients_) {
-            if (client.second.isConnected && client.second.channelName == clients_[client.first].channelName) {
-                if (!sendMessage(client.second.socket, message)) {
-                    std::cerr << "Failed to send message to client " << client.first << std::endl;
+        if (channelNameToAdmin_.count(channelName) == 0) {
+            channelNameToAdmin_[channelName] = clientId;
+            clients_[clientId].isAdmin = true;
+        }
+        clients_[clientId].channelName = channelName;
+        channels_[channelName].users.push_back(clients_[clientId].nickname);
+        if (channels_[channelName].adminNickname.empty()) {
+            channels_[channelName].adminNickname = clients_[clientId].nickname;
+        }
+        std::cout << clients_[clientId].nickname << " joined channel " << channelName << std::endl;
+    }
+
+    void removeUserFromChannel(const std::string& channelName, const std::string& clientId) {
+        std::lock_guard<std::mutex> lock(clientsMutex_);
+        if (channels_.count(channelName) > 0) {
+            auto& channel = channels_[channelName];
+            auto it = std::find(channel.users.begin(), channel.users.end(), clients_[clientId].nickname);
+            if (it != channel.users.end()) {
+                channel.users.erase(it);
+                if (channel.adminNickname == clients_[clientId].nickname) {
+                    if (!channel.users.empty()) {
+                        channel.adminNickname = channel.users.front();
+                    } else {
+                        channel.adminNickname.clear();
+                    }
+                }
+            }
+        }
+    }
+
+    void broadcastMessage(const std::string& message, const std::string& channelName) {
+        std::lock_guard<std::mutex> lock(clientsMutex_);
+        if (channels_.count(channelName) > 0) {
+            auto& channel = channels_[channelName];
+            for (const auto& client : clients_) {
+                if (client.second.isConnected && client.second.channelName == channelName &&
+                    (channel.mutedUsers.empty() ||
+                    std::find(channel.mutedUsers.begin(), channel.mutedUsers.end(), client.second.nickname) == channel.mutedUsers.end())) {
+                    if (!sendMessage(client.second.socket, message)) {
+                        std::cerr << "Failed to send message to client " << client.first << std::endl;
+                    }
                 }
             }
         }
@@ -239,6 +280,7 @@ private:
     int nextClientId_;
     std::unordered_map<std::string, Client> clients_;
     std::unordered_map<std::string, std::string> channelNameToAdmin_;
+    std::unordered_map<std::string, Channel> channels_;
     std::mutex clientsMutex_;
     bool running_;
 };

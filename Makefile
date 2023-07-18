@@ -16,7 +16,7 @@ client.o: client.cpp
 clean:
 	rm -f server client server.o client.o
 
-run-server: all server
+run-server: clean all server
 	./server
 
 run-client: client
