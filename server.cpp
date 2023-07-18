@@ -3,6 +3,7 @@
 #include <unordered_map>
 #include <thread>
 #include <mutex>
+#include <chrono>
 
 #ifdef _WIN32
 #include <winsock2.h>
@@ -12,6 +13,7 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
+#include <signal.h>
 #endif
 
 constexpr int MAX_MESSAGE_LENGTH = 4096;
@@ -31,6 +33,7 @@ struct Client {
     int socket;
     std::string nickname;
     bool isConnected;
+    int failedAttempts;
 };
 
 class Server {
@@ -143,7 +146,7 @@ private:
             }
 
             std::string clientId = "client_" + std::to_string(nextClientId_++);
-            clients_[clientId] = { clientSocket, "", false };
+            clients_[clientId] = { clientSocket, "", false, 0 };
 
             std::thread clientThread(&Server::handleClient, this, clientSocket, clientId);
             clientThread.detach();
@@ -167,19 +170,29 @@ private:
             std::string message(buffer);
             if (message.find("/nickname") == 0) {
                 clients_[clientId].nickname = message.substr(10);
-            } 
-            else if (message.find("/connect") == 0) {
+            } else if (message.find("/connect") == 0) {
                 clients_[clientId].isConnected = true;
                 std::cout << clients_[clientId].nickname << " connected." << std::endl;
                 broadcastMessage(clients_[clientId].nickname + " connected.\n");
-            } 
-            else if (!message.empty() && message[0] != '/' && clients_[clientId].isConnected) {
+            } else if (!message.empty() && message[0] != '/' && clients_[clientId].isConnected) {
                 std::cout << clients_[clientId].nickname << ": " << message << std::endl;
                 broadcastMessage(clients_[clientId].nickname + ": " + message);
-            }
-            else if (message.find("/ping") == 0) {
+            } else if (message.find("/ping") == 0) {
                 std::cout << "Server: pong" << std::endl;
                 broadcastMessage("Server: pong");
+            }
+
+            if (!clients_[clientId].isConnected) {
+                // Resend the message to the client if they haven't connected yet
+                if (clients_[clientId].failedAttempts < 5) {
+                    if (!sendMessage(clientSocket, "Please use the /connect command to establish a connection.")) {
+                        std::cerr << "Failed to send message to client " << clientId << std::endl;
+                    }
+                    clients_[clientId].failedAttempts++;
+                } else {
+                    std::cout << "Connection closed with client " << clients_[clientId].nickname << " due to multiple failed attempts." << std::endl;
+                    break;
+                }
             }
         }
 
@@ -195,9 +208,10 @@ private:
     void broadcastMessage(const std::string& message) {
         std::lock_guard<std::mutex> lock(clientsMutex_);
         for (const auto& client : clients_) {
-            //std::cout << client.second.nickname << sendMessage(client.second.socket, message) << std::endl;
-            if (!sendMessage(client.second.socket, message)) {
-                std::cerr << "Failed to send message to client " << client.first << std::endl;
+            if (client.second.isConnected) {
+                if (!sendMessage(client.second.socket, message)) {
+                    std::cerr << "Failed to send message to client " << client.first << std::endl;
+                }
             }
         }
     }
@@ -225,6 +239,12 @@ int main() {
         std::cerr << "Failed to initialize winsock" << std::endl;
         return 1;
     }
+#endif
+
+#ifdef _WIN32
+    SetConsoleCtrlHandler((PHANDLER_ROUTINE)CtrlHandler, TRUE);
+#else
+    signal(SIGINT, CtrlHandler);
 #endif
 
     int serverPort;
