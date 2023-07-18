@@ -13,7 +13,7 @@
 #endif
 
 constexpr int MAX_MESSAGE_LENGTH = 4096;
-constexpr int MAX_NICKNAME_LENGTH = 32;
+constexpr int MAX_NICKNAME_LENGTH = 50;
 
 #ifdef _WIN32
 BOOL CtrlHandler(DWORD fdwCtrlType) {
@@ -83,13 +83,30 @@ int main() {
     std::thread receiveThread(receiveMessages, clientSocket);
 
     std::string nickname;
-    std::cout << "Enter your nickname: ";
+    std::cout << "Enter your nickname (up to 50 characters): ";
     std::cin.ignore(); // Ignore newline character from previous input
     std::getline(std::cin, nickname);
+    nickname = nickname.substr(0, MAX_NICKNAME_LENGTH);
     std::string nicknameCommand = "/nickname " + nickname;
 
     if (send(clientSocket, nicknameCommand.c_str(), nicknameCommand.length(), 0) == -1) {
         std::cerr << "Failed to send nickname to server" << std::endl;
+        receiveThread.join();
+#ifdef _WIN32
+        closesocket(clientSocket);
+#else
+        close(clientSocket);
+#endif
+        return 1;
+    }
+
+    std::string channelName;
+    std::cout << "Enter channel name: ";
+    std::getline(std::cin, channelName);
+    std::string joinCommand = "/join " + channelName;
+
+    if (send(clientSocket, joinCommand.c_str(), joinCommand.length(), 0) == -1) {
+        std::cerr << "Failed to send join command to server" << std::endl;
         receiveThread.join();
 #ifdef _WIN32
         closesocket(clientSocket);

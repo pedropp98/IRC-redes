@@ -32,7 +32,9 @@ void CtrlHandler(int) {}
 struct Client {
     int socket;
     std::string nickname;
+    std::string channelName;
     bool isConnected;
+    bool isAdmin;
     int failedAttempts;
 };
 
@@ -146,7 +148,7 @@ private:
             }
 
             std::string clientId = "client_" + std::to_string(nextClientId_++);
-            clients_[clientId] = { clientSocket, "", false, 0 };
+            clients_[clientId] = { clientSocket, "", "", false, false, 0 };
 
             std::thread clientThread(&Server::handleClient, this, clientSocket, clientId);
             clientThread.detach();
@@ -174,6 +176,14 @@ private:
                 clients_[clientId].isConnected = true;
                 std::cout << clients_[clientId].nickname << " connected." << std::endl;
                 broadcastMessage(clients_[clientId].nickname + " connected.\n");
+            } else if (message.find("/join") == 0) {
+                std::string channelName = message.substr(6);
+                if (!channelName.empty()) {
+                    clients_[clientId].channelName = channelName;
+                    clients_[clientId].isAdmin = (channelNameToAdmin_.count(channelName) == 0);
+                    channelNameToAdmin_[channelName] = clientId;
+                    std::cout << clients_[clientId].nickname << " joined channel " << channelName << std::endl;
+                }
             } else if (!message.empty() && message[0] != '/' && clients_[clientId].isConnected) {
                 std::cout << clients_[clientId].nickname << ": " << message << std::endl;
                 broadcastMessage(clients_[clientId].nickname + ": " + message);
@@ -182,7 +192,7 @@ private:
                 broadcastMessage("Server: pong");
             }
 
-            if (!clients_[clientId].isConnected) {
+            if (!clients_[clientId].isConnected && !clients_[clientId].channelName.empty()) {
                 // Check if the client receive the messages
                 if (clients_[clientId].failedAttempts < 5) {
                     if (!sendMessage(clientSocket, "Please use the /connect command to establish a connection.")) {
@@ -208,7 +218,7 @@ private:
     void broadcastMessage(const std::string& message) {
         std::lock_guard<std::mutex> lock(clientsMutex_);
         for (const auto& client : clients_) {
-            if (client.second.isConnected) {
+            if (client.second.isConnected && client.second.channelName == clients_[client.first].channelName) {
                 if (!sendMessage(client.second.socket, message)) {
                     std::cerr << "Failed to send message to client " << client.first << std::endl;
                 }
@@ -228,6 +238,7 @@ private:
     int port_;
     int nextClientId_;
     std::unordered_map<std::string, Client> clients_;
+    std::unordered_map<std::string, std::string> channelNameToAdmin_;
     std::mutex clientsMutex_;
     bool running_;
 };
