@@ -183,7 +183,7 @@ private:
             }
 
             if (!clients_[clientId].isConnected) {
-                // Resend the message to the client if they haven't connected yet
+                // Check if the client receive the messages
                 if (clients_[clientId].failedAttempts < 5) {
                     if (!sendMessage(clientSocket, "Please use the /connect command to establish a connection.")) {
                         std::cerr << "Failed to send message to client " << clientId << std::endl;
