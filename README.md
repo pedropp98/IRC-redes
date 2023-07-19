@@ -25,4 +25,4 @@ WSL - Ubuntu 20.0.4
 `make run-client`
 
 ## Link do video
-[video]()
+[video](https://youtu.be/uVYwrE293aY)
