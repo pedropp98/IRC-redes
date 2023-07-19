@@ -43,6 +43,7 @@ struct Client {
 struct Channel {
     std::vector<std::string> users;
     std::vector<std::string> mutedUsers;
+    std::vector<std::string> kickedUsers;
     std::string adminNickname;
 };
 
@@ -113,8 +114,12 @@ private:
         return false;
     }
 
-    bool isKicked(const std::string& clientId) {
-        return clients_.find(clientId) == clients_.end();
+    bool isKicked(const std::string& username, const std::string& channelName) {
+        if (channels_.count(channelName) > 0) {
+            const auto& channel = channels_[channelName];
+            return std::find(channel.kickedUsers.begin(), channel.kickedUsers.end(), username) != channel.kickedUsers.end();
+        }
+        return false;
     }
 
     bool createServerSocket() {
@@ -202,7 +207,7 @@ private:
                 if (!channelName.empty()) {
                     joinChannel(channelName, clientId);
                 }
-            } else if (!message.empty() && message[0] != '/' && clients_[clientId].isConnected && !isMuted(clients_[clientId].nickname, clients_[clientId].channelName)) {
+            } else if (!message.empty() && message[0] != '/' && clients_[clientId].isConnected && !isMuted(clients_[clientId].nickname, clients_[clientId].channelName) && !isKicked(clients_[clientId].nickname, clients_[clientId].channelName)) {
                 std::cout << clients_[clientId].nickname << ": " << message << std::endl;
                 broadcastMessage(clients_[clientId].nickname + ": " + message, clients_[clientId].channelName);
             } else if (message.find("/ping") == 0) {
@@ -223,7 +228,7 @@ private:
             } else if (message.find("/kick") == 0) {
                 std::string username = message.substr(6);
                 if (clients_[clientId].isAdmin) {
-                    kickUser(username);
+                    kickUser(username, clients_[clientId].channelName, clientId);
                 } else {
                     if (!sendMessage(clientSocket, "You don't have permission to use the /kick command.")) {
                         std::cerr << "Failed to send message to client " << clientId << std::endl;
@@ -300,24 +305,19 @@ private:
         }
     }
 
-    void kickUser(const std::string& username) {
-        std::lock_guard<std::mutex> lock(clientsMutex_);
-        for (auto& client : clients_) {
-            if (client.second.nickname == username) {
-                std::string channelName = client.second.channelName;
-                std::string kickedClientId = client.first;
+    void kickUser(const std::string& username, const std::string& channelName, const std::string& kickedClientId) {
+        if (channels_.count(channelName) > 0) {
+            auto& channel = channels_[channelName];
+            if (std::find(channel.kickedUsers.begin(), channel.kickedUsers.end(), username) == channel.kickedUsers.end()) {
+                channel.kickedUsers.push_back(username);
                 std::cout << "User " << username << " has been kicked from the channel." << std::endl;
                 removeUserFromChannel(channelName, kickedClientId);
-#ifdef _WIN32
-                closesocket(client.second.socket);
-#else
-                close(client.second.socket);
-#endif
                 broadcastMessage("User " + username + " has been kicked from the channel.", channelName);
-                break;
             }
         }
     }
+            
+    
 
     void muteUser(const std::string& username, const std::string& channelName) {
         std::lock_guard<std::mutex> lock(clientsMutex_);
@@ -371,7 +371,7 @@ private:
             for (const auto& client : clients_) {
                 if (client.second.isConnected && client.second.channelName == channelName &&
                     //!isMuted(client.second.nickname, channelName) &&
-                    !isKicked(client.first)) {
+                    !isKicked(client.second.nickname, channelName)) {
                     if (!sendMessage(client.second.socket, message)) {
                         std::cerr << "Failed to send message to client " << client.first << std::endl;
                     }
