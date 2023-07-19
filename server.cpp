@@ -105,6 +105,18 @@ public:
     }
 
 private:
+    bool isMuted(const std::string& username, const std::string& channelName) {
+        if (channels_.count(channelName) > 0) {
+            const auto& channel = channels_[channelName];
+            return std::find(channel.mutedUsers.begin(), channel.mutedUsers.end(), username) != channel.mutedUsers.end();
+        }
+        return false;
+    }
+
+    bool isKicked(const std::string& clientId) {
+        return clients_.find(clientId) == clients_.end();
+    }
+
     bool createServerSocket() {
         serverSocket_ = socket(AF_INET, SOCK_STREAM, 0);
         if (serverSocket_ == -1) {
@@ -190,14 +202,14 @@ private:
                 if (!channelName.empty()) {
                     joinChannel(channelName, clientId);
                 }
-            } else if (!message.empty() && message[0] != '/' && clients_[clientId].isConnected) {
+            } else if (!message.empty() && message[0] != '/' && clients_[clientId].isConnected && !isMuted(clients_[clientId].nickname, clients_[clientId].channelName)) {
                 std::cout << clients_[clientId].nickname << ": " << message << std::endl;
                 broadcastMessage(clients_[clientId].nickname + ": " + message, clients_[clientId].channelName);
             } else if (message.find("/ping") == 0) {
                 std::cout << "Server: pong" << std::endl;
                 broadcastMessage("Server: pong", clients_[clientId].channelName);
             } else if (!message.empty() && !clients_[clientId].isConnected && !clients_[clientId].channelName.empty()) {
-                // Check if the client receive the messages
+                // Check if the client is muted or kicked
                 if (clients_[clientId].failedAttempts < 5) {
                     if (!sendMessage(clientSocket, "Please use the /connect command to establish a connection.")) {
                         std::cerr << "Failed to send message to client " << clientId << std::endl;
@@ -205,7 +217,44 @@ private:
                     clients_[clientId].failedAttempts++;
                 } else {
                     std::cout << "Connection closed with client " << clients_[clientId].nickname << " due to multiple failed attempts." << std::endl;
+                    removeUserFromChannel(clients_[clientId].channelName, clientId);
                     break;
+                }
+            } else if (message.find("/kick") == 0) {
+                std::string username = message.substr(6);
+                if (clients_[clientId].isAdmin) {
+                    kickUser(username);
+                } else {
+                    if (!sendMessage(clientSocket, "You don't have permission to use the /kick command.")) {
+                        std::cerr << "Failed to send message to client " << clientId << std::endl;
+                    }
+                }
+            } else if (message.find("/mute") == 0) {
+                std::string username = message.substr(6);
+                if (clients_[clientId].isAdmin) {
+                    muteUser(username, clients_[clientId].channelName);
+                } else {
+                    if (!sendMessage(clientSocket, "You don't have permission to use the /mute command.")) {
+                        std::cerr << "Failed to send message to client " << clientId << std::endl;
+                    }
+                }
+            } else if (message.find("/unmute") == 0) {
+                std::string username = message.substr(8);
+                if (clients_[clientId].isAdmin) {
+                    unmuteUser(username, clients_[clientId].channelName);
+                } else {
+                    if (!sendMessage(clientSocket, "You don't have permission to use the /unmute command.")) {
+                        std::cerr << "Failed to send message to client " << clientId << std::endl;
+                    }
+                }
+            } else if (message.find("/whois") == 0) {
+                std::string username = message.substr(7);
+                if (clients_[clientId].isAdmin) {
+                    sendUserIP(username, clientSocket);
+                } else {
+                    if (!sendMessage(clientSocket, "You don't have permission to use the /whois command.")) {
+                        std::cerr << "Failed to send message to client " << clientId << std::endl;
+                    }
                 }
             }
         }
@@ -251,14 +300,78 @@ private:
         }
     }
 
+    void kickUser(const std::string& username) {
+        std::lock_guard<std::mutex> lock(clientsMutex_);
+        for (auto& client : clients_) {
+            if (client.second.nickname == username) {
+                std::string channelName = client.second.channelName;
+                std::string kickedClientId = client.first;
+                std::cout << "User " << username << " has been kicked from the channel." << std::endl;
+                removeUserFromChannel(channelName, kickedClientId);
+#ifdef _WIN32
+                closesocket(client.second.socket);
+#else
+                close(client.second.socket);
+#endif
+                broadcastMessage("User " + username + " has been kicked from the channel.", channelName);
+                break;
+            }
+        }
+    }
+
+    void muteUser(const std::string& username, const std::string& channelName) {
+        std::lock_guard<std::mutex> lock(clientsMutex_);
+        if (channels_.count(channelName) > 0) {
+            auto& channel = channels_[channelName];
+            if (std::find(channel.mutedUsers.begin(), channel.mutedUsers.end(), username) == channel.mutedUsers.end()) {
+                channel.mutedUsers.push_back(username);
+                std::cout << "User " << username << " has been muted in channel " << channelName << std::endl;
+            }
+        }
+    }
+
+    void unmuteUser(const std::string& username, const std::string& channelName) {
+        std::lock_guard<std::mutex> lock(clientsMutex_);
+        if (channels_.count(channelName) > 0) {
+            auto& channel = channels_[channelName];
+            auto it = std::find(channel.mutedUsers.begin(), channel.mutedUsers.end(), username);
+            if (it != channel.mutedUsers.end()) {
+                channel.mutedUsers.erase(it);
+                std::cout << "User " << username << " has been unmuted in channel " << channelName << std::endl;
+            }
+        }
+    }
+
+    void sendUserIP(const std::string& username, int clientSocket) {
+        std::lock_guard<std::mutex> lock(clientsMutex_);
+        for (const auto& client : clients_) {
+            if (client.second.nickname == username) {
+                std::string ip = getClientIP(client.second.socket);
+                if (!sendMessage(clientSocket, "User " + username + " IP: " + ip)) {
+                    std::cerr << "Failed to send IP information to the administrator" << std::endl;
+                }
+                break;
+            }
+        }
+    }
+
+    std::string getClientIP(int socket) {
+        sockaddr_in addr{};
+        socklen_t len = sizeof(addr);
+        getpeername(socket, reinterpret_cast<struct sockaddr*>(&addr), &len);
+        char ip[INET_ADDRSTRLEN];
+        inet_ntop(AF_INET, &(addr.sin_addr), ip, INET_ADDRSTRLEN);
+        return std::string(ip);
+    }
+
     void broadcastMessage(const std::string& message, const std::string& channelName) {
         std::lock_guard<std::mutex> lock(clientsMutex_);
         if (channels_.count(channelName) > 0) {
             auto& channel = channels_[channelName];
             for (const auto& client : clients_) {
                 if (client.second.isConnected && client.second.channelName == channelName &&
-                    (channel.mutedUsers.empty() ||
-                    std::find(channel.mutedUsers.begin(), channel.mutedUsers.end(), client.second.nickname) == channel.mutedUsers.end())) {
+                    //!isMuted(client.second.nickname, channelName) &&
+                    !isKicked(client.first)) {
                     if (!sendMessage(client.second.socket, message)) {
                         std::cerr << "Failed to send message to client " << client.first << std::endl;
                     }
@@ -311,7 +424,7 @@ int main() {
     std::cout << "Type '/quit' to stop the server" << std::endl;
     while (true) {
         std::getline(std::cin, input);
-        if (input == "/quit") {
+        if (input.find("/quit") != std::string::npos) {
             break;
         }
     }
