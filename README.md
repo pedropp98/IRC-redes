@@ -23,3 +23,6 @@ WSL - Ubuntu 20.0.4
 `make run-server`
 10. Nos outros terminais, que serao os clientes, rode o seguinte comando:
 `make run-client`
+
+## Link do video
+[video]()
